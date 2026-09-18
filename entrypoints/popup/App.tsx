@@ -8,10 +8,10 @@ async function send<T>(message: PopupToBackground): Promise<T> {
 }
 
 function statusLabel(verdict: string) {
-  if (verdict === "allow") return "allowed";
-  if (verdict === "block") return "blocked";
-  if (verdict === "hold") return "review";
-  if (verdict === "checking") return "checking";
+  if (verdict === "allow") return "okay";
+  if (verdict === "block") return "off";
+  if (verdict === "hold") return "not sure";
+  if (verdict === "checking") return "looking";
   return "idle";
 }
 
@@ -44,6 +44,7 @@ export default function App() {
   const study = settings?.mode === "study";
   const needsKey = !state?.hasApiKey;
   const needsContext = !settings?.workContext.trim();
+  const canStart = !needsKey && !needsContext;
 
   const list = useMemo(
     () =>
@@ -60,7 +61,7 @@ export default function App() {
   if (!state || !settings) {
     return (
       <main className="shell">
-        <p className="muted">loading…</p>
+        <p className="muted">Loading</p>
       </main>
     );
   }
@@ -73,26 +74,18 @@ export default function App() {
           <h1>stud</h1>
           <p className="tag">your study buddy</p>
         </div>
-        <button
-          type="button"
-          className={study ? "mode on" : "mode"}
-          onClick={() =>
-            void send({ type: "SET_MODE", mode: study ? "free" : "study" })
-          }
-        >
-          {study ? "study" : "free"}
-        </button>
       </header>
 
       {needsKey ? (
         <section className="card warn">
-          <label htmlFor="key">TypeSafe API key</label>
+          <label htmlFor="key">TypeSafe key</label>
+          <p className="hint">Needed so stud can check tabs during a session.</p>
           <div className="row">
             <input
               id="key"
               type={showKey ? "text" : "password"}
               value={apiDraft}
-              placeholder="sk-…"
+              placeholder="paste your key"
               onChange={(event) => setApiDraft(event.target.value)}
             />
             <button type="button" onClick={() => setShowKey((v) => !v)}>
@@ -127,27 +120,41 @@ export default function App() {
               void send({ type: "SET_CONTEXT", workContext: contextDraft.trim() })
             }
           >
-            set context
+            save
           </button>
         </div>
-        {study && needsContext ? (
-          <p className="hint">Study mode waits until you set a context.</p>
-        ) : null}
       </section>
 
+      <button
+        type="button"
+        className={study ? "session end" : "session start"}
+        disabled={!study && !canStart}
+        onClick={() =>
+          void send({ type: "SET_MODE", mode: study ? "free" : "study" })
+        }
+      >
+        {study ? "End session" : "Start session"}
+      </button>
+      {!study && needsKey ? (
+        <p className="hint">Add your key before you start.</p>
+      ) : null}
+      {!study && !needsKey && needsContext ? (
+        <p className="hint">Say what you are working on, then start.</p>
+      ) : null}
+
       {state.lastError ? <p className="error">{state.lastError}</p> : null}
-      {state.judging ? <p className="hint">Jev is updating the allow list…</p> : null}
+      {state.judging ? <p className="hint">Checking your tabs…</p> : null}
 
       <section>
         <div className="section-head">
-          <h2>open tabs</h2>
+          <h2>your tabs</h2>
           <button type="button" className="text" onClick={() => void send({ type: "RESCAN" })}>
-            rescan
+            check again
           </button>
         </div>
         <ul className="tabs">
           {list.length === 0 ? (
-            <li className="muted">No pages to judge.</li>
+            <li className="muted">No tabs to show yet.</li>
           ) : (
             list.map((tab) => (
               <li key={tab.tabId} className={`tab ${tab.verdict}`}>
@@ -163,19 +170,19 @@ export default function App() {
       </section>
 
       <section>
-        <h2>allow list</h2>
+        <h2>okay for this session</h2>
         <ul className="list">
           {settings.pins
             .filter((pin) => pin.kind === "allow")
             .map((pin) => (
               <li key={`pin-${pin.host}`}>
-                <span>{pin.host} · pinned</span>
+                <span>{pin.host} · always</span>
                 <button
                   type="button"
                   className="text"
                   onClick={() => void send({ type: "UNPIN_HOST", host: pin.host })}
                 >
-                  unpin
+                  forget
                 </button>
               </li>
             ))}
@@ -195,14 +202,14 @@ export default function App() {
           ))}
           {settings.pins.filter((p) => p.kind === "allow").length === 0 &&
           allowEntries.length === 0 ? (
-            <li className="muted">Empty until Jev allows something.</li>
+            <li className="muted">Sites land here once a session is going.</li>
           ) : null}
         </ul>
       </section>
 
       {settings.pins.some((pin) => pin.kind === "block") ? (
         <section>
-          <h2>always blocked</h2>
+          <h2>kept off</h2>
           <ul className="list">
             {settings.pins
               .filter((pin) => pin.kind === "block")
@@ -214,7 +221,7 @@ export default function App() {
                     className="text"
                     onClick={() => void send({ type: "UNPIN_HOST", host: pin.host })}
                   >
-                    unpin
+                    forget
                   </button>
                 </li>
               ))}
@@ -231,7 +238,7 @@ export default function App() {
               void send({ type: "SET_API_KEY", apiKey: "" }).then(() => setApiDraft(""))
             }
           >
-            clear API key
+            remove key
           </button>
         </p>
       ) : null}

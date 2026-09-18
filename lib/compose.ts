@@ -57,19 +57,19 @@ export function cacheScope(
 
 export function verdictReason(verdict: Verdict, signals?: Signals): string {
   if (!signals) {
-    if (verdict === "allow") return "On the list.";
-    if (verdict === "block") return "Not on the list for this work.";
+    if (verdict === "allow") return "This is okay for the session.";
+    if (verdict === "block") return "This is off the list for this work.";
     return "Not sure yet.";
   }
   const pct = (n: number) => `${Math.round(n * 100)}%`;
   if (verdict === "allow") {
     if (signals.relevant >= DEFAULT_THRESHOLDS.relevantAllow) {
-      return `Looks useful for this work (${pct(signals.relevant)} relevant).`;
+      return `Looks useful for this work (${pct(signals.relevant)}).`;
     }
-    return `Treated as a work tool (${pct(signals.workTool)}).`;
+    return `Looks like a work tool (${pct(signals.workTool)}).`;
   }
   if (verdict === "block") {
-    return `Reads as a distraction (${pct(signals.distraction)}), not this work.`;
+    return `Looks like a distraction (${pct(signals.distraction)}).`;
   }
   return `Close call: relevant ${pct(signals.relevant)}, distraction ${pct(signals.distraction)}.`;
 }

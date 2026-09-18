@@ -33,7 +33,7 @@ body {
 
 .top {
   display: grid;
-  grid-template-columns: 40px 1fr auto;
+  grid-template-columns: 40px 1fr;
   gap: 10px;
   align-items: center;
 }
@@ -97,6 +97,31 @@ h2 {
   color: white;
 }
 
+.session {
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.session.start {
+  background: linear-gradient(90deg, #2563eb, #14b8a6);
+  color: white;
+}
+
+.session.end {
+  background: #e7e5e0;
+  color: var(--ink);
+}
+
+.session:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .card {
   background: white;
   border: 1px solid var(--line);
@@ -158,6 +183,10 @@ input {
 .error {
   margin: 0;
   font-size: 12px;
+}
+
+.card .hint {
+  margin: 0 0 8px;
 }
 
 .error {

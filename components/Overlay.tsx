@@ -46,10 +46,10 @@ export function Overlay() {
   }
 
   const hold = gate.verdict === "hold";
-  const title = hold ? "not sure this belongs" : "not on the list";
+  const title = hold ? "not sure this helps" : "off the list";
   const body = hold
-    ? "Jev could not tell if this tab is for your current work."
-    : "This tab is off the list while you study.";
+    ? "Can't tell if this is part of what you are working on."
+    : "This does not look like part of this session.";
 
   async function send(verdict: "allow" | "block", always = false) {
     await browser.runtime.sendMessage({
@@ -66,21 +66,21 @@ export function Overlay() {
         <p className="stud-kicker">stud</p>
         <h1>{title}</h1>
         {gate.workContext ? (
-          <p className="stud-context">working on: {gate.workContext}</p>
+          <p className="stud-context">for: {gate.workContext}</p>
         ) : null}
         <p className="stud-body">{body}</p>
         {gate.reason ? <p className="stud-reason">{gate.reason}</p> : null}
         <p className="stud-host">{gate.host}</p>
         <div className="stud-actions">
           <button type="button" className="primary" onClick={() => void send("allow")}>
-            keep this tab
+            keep it anyway
           </button>
           <button type="button" className="ghost" onClick={() => void send("allow", true)}>
             always allow {gate.host}
           </button>
           {hold ? (
             <button type="button" className="quiet" onClick={() => void send("block", true)}>
-              keep it off the list
+              keep it off
             </button>
           ) : (
             <button type="button" className="quiet" onClick={() => void send("block")}>

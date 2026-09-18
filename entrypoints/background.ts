@@ -262,7 +262,7 @@ async function scanAllTabs() {
           parsed,
           tab.title ?? parsed.host,
           "skipped",
-          { reason: "Free mode." },
+          { reason: "No session." },
           settings.workContext,
         );
         continue;
@@ -273,7 +273,7 @@ async function scanAllTabs() {
           parsed,
           tab.title ?? parsed.host,
           "skipped",
-          { reason: "Add a TypeSafe API key." },
+          { reason: "Add your TypeSafe key first." },
           settings.workContext,
         );
         continue;
@@ -284,7 +284,7 @@ async function scanAllTabs() {
           parsed,
           tab.title ?? parsed.host,
           "skipped",
-          { reason: "Set what you are working on." },
+          { reason: "Say what you are working on first." },
           settings.workContext,
         );
         continue;
@@ -301,8 +301,8 @@ async function scanAllTabs() {
             source: "pin",
             reason:
               pin.kind === "allow"
-                ? "Pinned on the allow list."
-                : "Pinned off the list.",
+                ? "You allowed this site."
+                : "You kept this site off.",
           },
           settings.workContext,
         );
@@ -339,7 +339,7 @@ async function scanAllTabs() {
           parsed,
           tab.title ?? parsed.host,
           "checking",
-          { reason: "Asking Jev…" },
+          { reason: "Checking…" },
           settings.workContext,
         );
       }
