@@ -1,4 +1,4 @@
-# stud
+# <img src="public/mascot.png" width="32" height="32" alt="" valign="middle"> stud
 
 Stud the study bud is a Chrome extension for the part of a study session that leaks into the browser. You are in problem sets and essays. Tabs pile up. Stud watches them against what you said you were working on.
 
