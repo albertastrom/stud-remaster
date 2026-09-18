@@ -1,32 +1,32 @@
 # stud
 
-Chrome extension. You name the work. In study mode, Jev scores each open tab. Code keeps an allow list and covers the rest.
+Stud the study bud is a Chrome extension for the part of a study session that leaks into the browser. You are in problem sets and essays. Tabs pile up. Stud watches them against what you said you were working on.
 
-## How a session goes
+Start a session, name the work, and keep going. Pages that belong stay. Pages that don't belong get a gate from the mascot. You can keep a tab, always allow a site, or go back to the work.
 
-![Four steps: save a key, set context, watch the allow list, then a gate on off-list tabs](docs/readme/session-flow.png)
-
-## In use
-
-![stud overlay on minecraft.net during a linear algebra session](docs/readme/overlay.png)
-
-![stud popup in study mode with open tabs marked review, blocked, and allowed](docs/readme/popup.png)
+This build is the extension only. No timer, no break check-in, no past-session dashboard.
 
 ## Load
 
 1. `npm install && npm run build`
 2. Chrome → `chrome://extensions` → Developer mode → Load unpacked → `.output/chrome-mv3`
-3. Paste a TypeSafe API key, set context, switch to **study**
+3. Paste a TypeSafe key, say what you are working on, press **Start session**
 
 `npm run dev` for live reload on the same unpacked path.
 
+![Four steps: save a key, set the work, start a session, then a gate on off-list tabs](docs/readme/session-flow.png)
+
+![stud overlay on minecraft.net during a linear algebra session](docs/readme/overlay.png)
+
+![stud popup with Start session and open tabs](docs/readme/popup.png)
+
 ## Decisions
 
-One TypeSafe request per batch. Three nouls per tab: relevant to the work, distraction, general work tool. `lib/compose.ts` maps those to allow, block, or hold.
+One TypeSafe request per batch. Three yes/no scores per tab: does it help this work, is it a distraction, is it a general work tool. `lib/compose.ts` turns those into okay, off, or not sure.
 
-Noul near 0.5 is hold. A work tool can allow a whole host. A YouTube lecture is cached as that URL.
+Near 0.5 is not sure. A work tool can allow a whole host. A YouTube lecture is cached as that URL.
 
-Pin hosts in the popup. Thresholds live in `lib/defaults.ts`. The API key stays in `chrome.storage.local` on this device.
+Pin sites in the popup. Thresholds live in `lib/defaults.ts`. The API key stays in `chrome.storage.local` on this device.
 
 ## Stack
 
