@@ -2,6 +2,16 @@
 
 Chrome extension. You name the work. In study mode, Jev scores each open tab. Code keeps an allow list and covers the rest.
 
+## How a session goes
+
+![Four steps: save a key, set context, watch the allow list, then a gate on off-list tabs](docs/readme/session-flow.png)
+
+## In use
+
+![stud overlay on minecraft.net during a linear algebra session](docs/readme/overlay.png)
+
+![stud popup in study mode with open tabs marked review, blocked, and allowed](docs/readme/popup.png)
+
 ## Load
 
 1. `npm install && npm run build`
