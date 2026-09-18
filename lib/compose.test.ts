@@ -1,4 +1,5 @@
 import { cacheScope, composeVerdict } from "./compose.ts";
+import { DEFAULT_THRESHOLDS } from "./defaults.ts";
 
 function assert(cond: unknown, message: string) {
   if (!cond) throw new Error(message);
@@ -33,6 +34,16 @@ assert(
     "allow",
   ) === "url",
   "topic-specific allow stays on the url",
+);
+
+assert(
+  cacheScope(
+    { relevant: 0.1, distraction: 0.92, workTool: 0.05 },
+    "block",
+    DEFAULT_THRESHOLDS,
+    "google.com",
+  ) === "url",
+  "search hosts stay per url",
 );
 
 console.log("compose tests passed");

@@ -4,7 +4,9 @@ Stud the study bud is a Chrome extension for the part of a study session that le
 
 Start a session, name the work, and keep going. Pages that belong stay. Pages that don't belong get a gate from the mascot. You can keep a tab, always allow a site, or go back to the work.
 
-This build is the extension only. No timer, no break check-in, no past-session dashboard.
+This is a remake of the original [stud](https://github.com/albertastrom/stud) from HackHarvard 2023, rebuilt around TypeSafe Jev. The first version mixed a web app, a timer, and an extension. This one is the extension: you name the work, start a session, and Jev scores the tabs.
+
+This build has no timer, no break check-in, and no past-session dashboard.
 
 ## Load
 

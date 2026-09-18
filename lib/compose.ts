@@ -1,5 +1,6 @@
 import { DEFAULT_THRESHOLDS } from "./defaults.ts";
 import type { CacheScope, Signals, Thresholds, Verdict } from "./types.ts";
+import { isSearchHost } from "./url.ts";
 
 /** Maps three independent nouls to allow, block, or hold. */
 export function composeVerdict(
@@ -36,12 +37,16 @@ export function composeVerdict(
   return "hold";
 }
 
-/** Cache the host when the verdict is about the site, not one page. */
+/** Cache the host when the verdict is about the site, not one page. Search hosts stay per-URL. */
 export function cacheScope(
   signals: Signals,
   verdict: Verdict,
   thresholds: Thresholds = DEFAULT_THRESHOLDS,
+  host?: string,
 ): CacheScope {
+  if (host && isSearchHost(host)) {
+    return "url";
+  }
   if (verdict === "allow" && signals.workTool >= thresholds.toolAllow) {
     return "host";
   }

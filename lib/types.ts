@@ -81,6 +81,7 @@ export type GateMessage = {
   verdict: Verdict | "checking" | "skipped";
   workContext: string;
   host: string;
+  url: string;
   reason?: string;
 };
 

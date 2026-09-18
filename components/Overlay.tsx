@@ -5,10 +5,20 @@ type OverlayState = {
   verdict: Verdict | "checking" | "skipped";
   workContext: string;
   host: string;
+  url: string;
   reason?: string;
 };
 
 const mascot = browser.runtime.getURL("/mascot.png");
+
+function pageKey(): string {
+  return `${location.origin}${location.pathname}${location.search}`;
+}
+
+function gateIsForThisPage(message: GateMessage): boolean {
+  if (message.url) return message.url === pageKey();
+  return message.host === location.hostname.replace(/^www\./, "");
+}
 
 export function Overlay() {
   const [gate, setGate] = useState<OverlayState | null>(null);
@@ -16,6 +26,10 @@ export function Overlay() {
   useEffect(() => {
     const onMessage = (message: GateMessage) => {
       if (message?.type !== "STUD_GATE") return;
+      if (!gateIsForThisPage(message)) {
+        setGate(null);
+        return;
+      }
       setGate((current) => {
         if (
           message.verdict === "checking" &&
@@ -27,6 +41,7 @@ export function Overlay() {
           verdict: message.verdict,
           workContext: message.workContext,
           host: message.host,
+          url: message.url,
           reason: message.reason,
         };
       });
@@ -38,6 +53,7 @@ export function Overlay() {
 
   if (
     !gate ||
+    gate.url !== pageKey() ||
     gate.verdict === "allow" ||
     gate.verdict === "skipped" ||
     gate.verdict === "checking"

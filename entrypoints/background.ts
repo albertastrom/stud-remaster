@@ -27,6 +27,20 @@ let judging = false;
 let rescanNeeded = false;
 let scanTimer: ReturnType<typeof setTimeout> | null = null;
 let lastAllowedTabId: number | null = null;
+const tabGen = new Map<number, number>();
+
+function bumpGen(tabId: number) {
+  tabGen.set(tabId, (tabGen.get(tabId) ?? 0) + 1);
+}
+
+function currentGen(tabId: number) {
+  return tabGen.get(tabId) ?? 0;
+}
+
+function forgetTabPage(tabId: number) {
+  tabRecords.delete(tabId);
+  bumpGen(tabId);
+}
 
 function publicState(settings: Settings, extras: Omit<LiveState, "settings" | "hasApiKey">): LiveState {
   return {
@@ -73,9 +87,13 @@ async function notifyTab(record: TabRecord, workContext: string) {
     verdict: record.verdict,
     workContext,
     host: record.host,
+    url: record.url,
     reason: record.reason,
   };
   try {
+    const live = await browser.tabs.get(record.tabId);
+    const liveParsed = parseTabUrl(live.url);
+    if (!liveParsed || liveParsed.url !== record.url) return;
     await browser.tabs.sendMessage(record.tabId, message);
   } catch {
     // chrome:// and discarded tabs have no content script
@@ -153,7 +171,11 @@ type QueryTab = {
 async function judgeBatch(
   settings: Settings,
   contextHash: string,
-  pending: Array<{ tab: QueryTab; parsed: NonNullable<ReturnType<typeof parseTabUrl>> }>,
+  pending: Array<{
+    tab: QueryTab;
+    parsed: NonNullable<ReturnType<typeof parseTabUrl>>;
+    gen: number;
+  }>,
 ): Promise<Settings> {
   const tabs = pending.map(({ tab, parsed }) => ({
     title: tab.title ?? parsed.host,
@@ -179,7 +201,7 @@ async function judgeBatch(
       workTool: readNoul(response.answers, `work_tool_${i}`),
     };
     const verdict = composeVerdict(signals, settings.thresholds);
-    const scope = cacheScope(signals, verdict, settings.thresholds);
+    const scope = cacheScope(signals, verdict, settings.thresholds, parsed.host);
     const entry: AllowEntry = {
       key: scope === "host" ? hostKey(parsed.host) : urlKey(parsed.host, parsed.pathname, parsed.search),
       host: parsed.host,
@@ -203,7 +225,11 @@ async function judgeBatch(
       live = undefined;
     }
     const liveParsed = parseTabUrl(live?.url);
-    if (!liveParsed || !samePage(liveParsed, parsed)) {
+    if (
+      item.gen !== currentGen(tabId) ||
+      !liveParsed ||
+      !samePage(liveParsed, parsed)
+    ) {
       rescanNeeded = true;
       continue;
     }
@@ -239,6 +265,7 @@ async function scanAllTabs() {
     const pending: Array<{
       tab: QueryTab;
       parsed: NonNullable<ReturnType<typeof parseTabUrl>>;
+      gen: number;
     }> = [];
 
     for (const tab of tabs) {
@@ -343,16 +370,26 @@ async function scanAllTabs() {
           settings.workContext,
         );
       }
-      pending.push({ tab, parsed });
+      pending.push({ tab, parsed, gen: currentGen(tab.id) });
     }
 
+    const [focused] = await browser.tabs.query({
+      active: true,
+      lastFocusedWindow: true,
+    });
+    const focusedId = focused?.id;
+    const urgent = pending.filter((item) => item.tab.id === focusedId);
+    const rest = pending.filter((item) => item.tab.id !== focusedId);
+
     let current = settings;
-    for (let i = 0; i < pending.length; i += BATCH_SIZE) {
-      current = await judgeBatch(
-        current,
-        contextHash,
-        pending.slice(i, i + BATCH_SIZE),
-      );
+    for (const batch of [urgent, rest]) {
+      for (let i = 0; i < batch.length; i += BATCH_SIZE) {
+        current = await judgeBatch(
+          current,
+          contextHash,
+          batch.slice(i, i + BATCH_SIZE),
+        );
+      }
     }
 
     const blocked = [...tabRecords.values()].filter(
@@ -382,7 +419,7 @@ function scheduleScan() {
   if (scanTimer) clearTimeout(scanTimer);
   scanTimer = setTimeout(() => {
     void scanAllTabs();
-  }, 280);
+  }, 50);
 }
 
 async function mutateSettings(patch: (current: Settings) => Settings) {
@@ -399,14 +436,19 @@ export default defineBackground(() => {
   });
 
   browser.tabs.onUpdated.addListener((_id, change, tab) => {
+    if (tab.id == null) return;
+    const live = parseTabUrl(tab.url);
+    const existing = tabRecords.get(tab.id);
+    if (change.url || (existing && live && existing.url !== live.url)) {
+      forgetTabPage(tab.id);
+    }
     if (change.url || change.status === "complete" || change.title) {
-      if (tab.id != null && change.url) tabRecords.delete(tab.id);
       scheduleScan();
     }
   });
   browser.tabs.onActivated.addListener(() => scheduleScan());
   browser.tabs.onRemoved.addListener((tabId) => {
-    tabRecords.delete(tabId);
+    forgetTabPage(tabId);
     if (lastAllowedTabId === tabId) lastAllowedTabId = null;
     void pushState();
   });
@@ -543,11 +585,15 @@ export default defineBackground(() => {
 
       if (message.type === "GATE_FOR_ME" && sender.tab?.id != null) {
         const existing = tabRecords.get(sender.tab.id);
-        if (existing) {
+        const live = parseTabUrl(sender.tab.url);
+        if (existing && live && existing.url === live.url) {
           void loadSettings().then((settings) =>
             notifyTab(existing, settings.workContext),
           );
         } else {
+          if (existing && live && existing.url !== live.url) {
+            forgetTabPage(sender.tab.id);
+          }
           scheduleScan();
         }
       }

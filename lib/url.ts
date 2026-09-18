@@ -30,6 +30,34 @@ export function hostKey(host: string): string {
   return host;
 }
 
+export function isSearchHost(host: string): boolean {
+  const h = host.replace(/^www\./, "").toLowerCase();
+  if (
+    h === "bing.com" ||
+    h === "duckduckgo.com" ||
+    h === "duck.com" ||
+    h === "yahoo.com" ||
+    h === "search.yahoo.com" ||
+    h === "brave.com" ||
+    h === "search.brave.com" ||
+    h === "startpage.com" ||
+    h === "ecosia.org" ||
+    h === "baidu.com" ||
+    h === "yandex.com" ||
+    h === "yandex.ru"
+  ) {
+    return true;
+  }
+  if (h === "google.com" || h.startsWith("google.") || h.endsWith(".google.com")) {
+    return true;
+  }
+  return false;
+}
+
+export function hrefKey(raw: string | undefined): string | null {
+  return parseTabUrl(raw)?.url ?? null;
+}
+
 export function samePage(
   a: NonNullable<ReturnType<typeof parseTabUrl>>,
   b: NonNullable<ReturnType<typeof parseTabUrl>>,
