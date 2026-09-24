@@ -14,9 +14,9 @@ Chrome extension. You name the work. In study mode, Jev scores each open tab. Co
 
 One TypeSafe request per batch. Three nouls per tab: relevant to the work, distraction, general work tool. `lib/compose.ts` maps those to allow, block, or hold.
 
-Noul near 0.5 is hold. A work tool can allow a whole host. A YouTube lecture is cached as that URL.
+Noul near 0.5 is hold. A work tool allows its whole host. Everything else caches per URL, so a lecture on YouTube can pass while the feed stays blocked.
 
-Pin hosts in the popup. Thresholds live in `lib/defaults.ts`. The API key stays in `chrome.storage.local` on this device.
+On a gated page, **back to work** closes it and jumps to your last allowed tab. Pin hosts from the overlay or the popup. Thresholds live in `lib/defaults.ts`. The API key stays in `chrome.storage.local` on this device.
 
 ## Stack
 
