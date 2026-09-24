@@ -19,7 +19,6 @@ export type TabSnapshot = {
   title: string;
   host: string;
   url: string;
-  path: string;
 };
 
 export function buildTabQuestions(count: number): Record<string, NoulQuestion> {
@@ -105,15 +104,12 @@ export function buildTabQuestions(count: number): Record<string, NoulQuestion> {
 export function sessionState(workContext: string, tabs: TabSnapshot[]) {
   return {
     session: {
-      mode: "study",
       work_context: workContext,
     },
-    tabs: tabs.map((tab, index) => ({
-      index,
+    tabs: tabs.map((tab) => ({
       title: tab.title.slice(0, 180),
       host: tab.host,
       url: tab.url.slice(0, 300),
-      path: tab.path.slice(0, 180),
     })),
   };
 }

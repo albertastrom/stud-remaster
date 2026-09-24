@@ -1,7 +1,8 @@
-import { DEFAULT_SETTINGS } from "./defaults";
+import { DEFAULT_SETTINGS, HOLD_TTL_MS } from "./defaults";
 import type { AllowEntry, Settings } from "./types";
 
 const SETTINGS_KEY = "stud.settings.v1";
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function mergeSettings(raw: unknown): Settings {
   const base = structuredClone(DEFAULT_SETTINGS);
@@ -14,7 +15,6 @@ function mergeSettings(raw: unknown): Settings {
       typeof value.workContext === "string" ? value.workContext : base.workContext,
     pins: Array.isArray(value.pins) ? value.pins : base.pins,
     allowlist: Array.isArray(value.allowlist) ? value.allowlist : base.allowlist,
-    thresholds: { ...base.thresholds, ...(value.thresholds ?? {}) },
   };
 }
 
@@ -23,32 +23,31 @@ export async function loadSettings(): Promise<Settings> {
   return mergeSettings(stored[SETTINGS_KEY]);
 }
 
-export async function saveSettings(settings: Settings): Promise<void> {
-  await browser.storage.local.set({ [SETTINGS_KEY]: settings });
+let queue: Promise<unknown> = Promise.resolve();
+
+/** Serialized read-modify-write so concurrent scans and popup edits never drop each other's changes. */
+export function updateSettings(patch: (current: Settings) => Settings): Promise<Settings> {
+  const run = queue.then(async () => {
+    const next = patch(await loadSettings());
+    await browser.storage.local.set({ [SETTINGS_KEY]: next });
+    return next;
+  });
+  queue = run.catch(() => undefined);
+  return run;
 }
 
-export function upsertAllowEntry(
-  list: AllowEntry[],
-  entry: AllowEntry,
-): AllowEntry[] {
-  const without = list.filter(
-    (item) =>
-      !(item.contextHash === entry.contextHash && item.key === entry.key),
-  );
-  return [...without, entry];
+export function upsertAllowEntries(list: AllowEntry[], entries: AllowEntry[]): AllowEntry[] {
+  const replaced = new Set(entries.map((e) => `${e.contextHash}|${e.key}`));
+  return [...list.filter((item) => !replaced.has(`${item.contextHash}|${item.key}`)), ...entries];
 }
 
-export function pruneAllowlist(
-  list: AllowEntry[],
-  contextHash: string,
-): AllowEntry[] {
-  const maxAge = 1000 * 60 * 60 * 24 * 14;
+export function pruneAllowlist(list: AllowEntry[], contextHash: string): AllowEntry[] {
   const now = Date.now();
   return list.filter((item) => {
-    if (now - item.at > maxAge) return false;
-    if (item.contextHash !== contextHash && item.source === "jev") {
-      return now - item.at < 1000 * 60 * 60 * 24;
-    }
+    const age = now - item.at;
+    if (age > 14 * DAY_MS) return false;
+    if (item.verdict === "hold" && age > HOLD_TTL_MS) return false;
+    if (item.contextHash !== contextHash && item.source === "jev") return age < DAY_MS;
     return true;
   });
 }

@@ -1,14 +1,7 @@
-import { DEFAULT_THRESHOLDS } from "./defaults.ts";
-import type { CacheScope, Signals, Thresholds, Verdict } from "./types.ts";
+import { THRESHOLDS as t } from "./defaults.ts";
+import type { CacheScope, Signals, Verdict } from "./types.ts";
 
-/** Maps three independent nouls to allow, block, or hold. */
-export function composeVerdict(
-  signals: Signals,
-  thresholds: Thresholds = DEFAULT_THRESHOLDS,
-): Verdict {
-  const { relevant, distraction, workTool } = signals;
-  const t = thresholds;
-
+export function composeVerdict({ relevant, distraction, workTool }: Signals): Verdict {
   if (distraction >= t.blockDistraction && relevant < t.blockMaxRelevant) {
     return "block";
   }
@@ -19,11 +12,8 @@ export function composeVerdict(
     return "allow";
   }
 
-  const relevantUncertain =
-    relevant > t.noulUncertainLow && relevant < t.noulUncertainHigh;
-  const distractionUncertain =
-    distraction > t.noulUncertainLow && distraction < t.noulUncertainHigh;
-  if (relevantUncertain && distractionUncertain) {
+  const uncertain = (n: number) => n > t.noulUncertainLow && n < t.noulUncertainHigh;
+  if (uncertain(relevant) && uncertain(distraction)) {
     return "hold";
   }
 
@@ -36,40 +26,25 @@ export function composeVerdict(
   return "hold";
 }
 
-/** Cache the host when the verdict is about the site, not one page. */
-export function cacheScope(
-  signals: Signals,
-  verdict: Verdict,
-  thresholds: Thresholds = DEFAULT_THRESHOLDS,
-): CacheScope {
-  if (verdict === "allow" && signals.workTool >= thresholds.toolAllow) {
-    return "host";
-  }
-  if (
-    verdict === "block" &&
-    signals.distraction >= thresholds.hostBlockDistraction &&
-    signals.relevant < thresholds.hostBlockMaxRelevant
-  ) {
-    return "host";
-  }
-  return "url";
+/** Only work tools cache per host; blocks stay per URL so a lecture on a media site can still pass. */
+export function cacheScope(signals: Signals, verdict: Verdict): CacheScope {
+  return verdict === "allow" && signals.workTool >= t.toolAllow ? "host" : "url";
 }
 
 export function verdictReason(verdict: Verdict, signals?: Signals): string {
   if (!signals) {
-    if (verdict === "allow") return "On the list.";
-    if (verdict === "block") return "Not on the list for this work.";
+    if (verdict === "allow") return "You kept this page.";
+    if (verdict === "block") return "Off the list.";
     return "Not sure yet.";
   }
   const pct = (n: number) => `${Math.round(n * 100)}%`;
   if (verdict === "allow") {
-    if (signals.relevant >= DEFAULT_THRESHOLDS.relevantAllow) {
-      return `Looks useful for this work (${pct(signals.relevant)} relevant).`;
-    }
-    return `Treated as a work tool (${pct(signals.workTool)}).`;
+    return signals.relevant < t.relevantAllow && signals.workTool >= t.toolAllow
+      ? `Work tool (${pct(signals.workTool)}).`
+      : `Relevant to this work (${pct(signals.relevant)}).`;
   }
   if (verdict === "block") {
-    return `Reads as a distraction (${pct(signals.distraction)}), not this work.`;
+    return `Distraction (${pct(signals.distraction)}).`;
   }
   return `Close call: relevant ${pct(signals.relevant)}, distraction ${pct(signals.distraction)}.`;
 }

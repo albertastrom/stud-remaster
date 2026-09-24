@@ -1,10 +1,12 @@
-export function parseTabUrl(raw: string | undefined): {
+export type ParsedUrl = {
   url: string;
   host: string;
   pathname: string;
   search: string;
   internal: boolean;
-} | null {
+};
+
+export function parseTabUrl(raw: string | undefined): ParsedUrl | null {
   if (!raw) return null;
   let parsed: URL;
   try {
@@ -12,34 +14,23 @@ export function parseTabUrl(raw: string | undefined): {
   } catch {
     return null;
   }
-  const internal = !["http:", "https:"].includes(parsed.protocol);
   return {
     url: `${parsed.origin}${parsed.pathname}${parsed.search}`,
     host: parsed.hostname.replace(/^www\./, ""),
     pathname: parsed.pathname || "/",
     search: parsed.search,
-    internal,
+    internal: parsed.protocol !== "http:" && parsed.protocol !== "https:",
   };
 }
 
-export function urlKey(host: string, pathname: string, search = ""): string {
+export function urlKey({ host, pathname, search }: ParsedUrl): string {
   return `${host}${pathname.replace(/\/$/, "") || "/"}${search}`;
 }
 
-export function hostKey(host: string): string {
-  return host;
-}
-
-export function samePage(
-  a: NonNullable<ReturnType<typeof parseTabUrl>>,
-  b: NonNullable<ReturnType<typeof parseTabUrl>>,
-): boolean {
-  return a.url === b.url;
-}
-
 export async function hashContext(workContext: string): Promise<string> {
-  const bytes = new TextEncoder().encode(workContext.trim().toLowerCase());
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const normalized = workContext.trim().toLowerCase();
+  if (!normalized) return "";
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(normalized));
   return [...new Uint8Array(digest)]
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("")

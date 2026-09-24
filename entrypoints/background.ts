@@ -4,67 +4,53 @@ import { buildTabQuestions, sessionState } from "../lib/questions";
 import {
   loadSettings,
   pruneAllowlist,
-  saveSettings,
-  upsertAllowEntry,
+  updateSettings,
+  upsertAllowEntries,
 } from "../lib/storage";
 import { readNoul, systemOne, TypeSafeHttpError } from "../lib/typesafe";
 import type {
   AllowEntry,
   BackgroundToPopup,
+  ContentToBackground,
   GateMessage,
   LiveState,
   PinKind,
   PopupToBackground,
   Settings,
   TabRecord,
-  Verdict,
+  TabVerdict,
 } from "../lib/types";
-import { hashContext, hostKey, parseTabUrl, samePage, urlKey } from "../lib/url";
+import { hashContext, parseTabUrl, urlKey, type ParsedUrl } from "../lib/url";
+
+type PendingTab = { tabId: number; title: string; parsed: ParsedUrl };
 
 const tabRecords = new Map<number, TabRecord>();
 let lastError: string | null = null;
 let judging = false;
 let rescanNeeded = false;
 let scanTimer: ReturnType<typeof setTimeout> | null = null;
-let lastAllowedTabId: number | null = null;
-
-function publicState(settings: Settings, extras: Omit<LiveState, "settings" | "hasApiKey">): LiveState {
-  return {
-    settings: { ...settings, apiKey: "" },
-    hasApiKey: Boolean(settings.apiKey),
-    ...extras,
-  };
-}
-
-function broadcastState(state: LiveState) {
-  void browser.runtime.sendMessage({ type: "STATE", state } satisfies BackgroundToPopup).catch(
-    () => undefined,
-  );
-}
 
 async function snapshot(): Promise<LiveState> {
   const settings = await loadSettings();
-  const contextHash = settings.workContext
-    ? await hashContext(settings.workContext)
-    : "";
-  return publicState(settings, {
+  return {
+    settings: { ...settings, apiKey: "" },
+    hasApiKey: Boolean(settings.apiKey),
     tabs: [...tabRecords.values()].sort((a, b) => b.updatedAt - a.updatedAt),
-    contextHash,
+    contextHash: await hashContext(settings.workContext),
     lastError,
     judging,
-  });
+  };
 }
 
 async function pushState() {
-  broadcastState(await snapshot());
-}
-
-function setBadge(mode: Settings["mode"], blocked: number) {
-  const text = mode === "study" ? (blocked > 0 ? String(blocked) : "ON") : "";
-  void browser.action.setBadgeText({ text });
-  void browser.action.setBadgeBackgroundColor({
-    color: mode === "study" ? "#0F766E" : "#9CA3AF",
-  });
+  const state = await snapshot();
+  const study = state.settings.mode === "study";
+  const blocked = state.tabs.filter((tab) => tab.verdict === "block").length;
+  void browser.action.setBadgeText({ text: study ? (blocked ? String(blocked) : "ON") : "" });
+  void browser.action.setBadgeBackgroundColor({ color: study ? "#0F766E" : "#9CA3AF" });
+  void browser.runtime
+    .sendMessage({ type: "STATE", state } satisfies BackgroundToPopup)
+    .catch(() => undefined);
 }
 
 async function notifyTab(record: TabRecord, workContext: string) {
@@ -75,151 +61,130 @@ async function notifyTab(record: TabRecord, workContext: string) {
     host: record.host,
     reason: record.reason,
   };
-  try {
-    await browser.tabs.sendMessage(record.tabId, message);
-  } catch {
-    // chrome:// and discarded tabs have no content script
-  }
+  // chrome:// and discarded tabs have no content script
+  await browser.tabs.sendMessage(record.tabId, message).catch(() => undefined);
 }
 
-function lookupCache(
-  settings: Settings,
-  contextHash: string,
-  host: string,
-  pathname: string,
-  search = "",
-): AllowEntry | undefined {
-  const exact = urlKey(host, pathname, search);
-  const hostOnly = hostKey(host);
-  const now = Date.now();
-  const fresh = (item: AllowEntry) =>
-    item.verdict !== "hold" || now - item.at < HOLD_TTL_MS;
-  return (
-    settings.allowlist.find(
-      (item) =>
-        item.contextHash === contextHash &&
-        fresh(item) &&
-        item.scope === "url" &&
-        item.key === exact,
-    ) ??
-    settings.allowlist.find(
-      (item) =>
-        item.contextHash === contextHash &&
-        fresh(item) &&
-        item.scope === "host" &&
-        item.key === hostOnly,
-    )
-  );
-}
-
-function pinFor(settings: Settings, host: string) {
-  return settings.pins.find((pin) => pin.host === host);
-}
-
-function writeRecord(record: TabRecord) {
-  tabRecords.set(record.tabId, record);
-}
-
-async function applyVerdict(
+async function setRecord(
   tabId: number,
-  parsed: NonNullable<ReturnType<typeof parseTabUrl>>,
+  parsed: ParsedUrl,
   title: string,
-  verdict: Verdict | "checking" | "skipped",
-  extras: Partial<TabRecord>,
+  verdict: TabVerdict,
+  reason: string,
   workContext: string,
 ) {
+  const prev = tabRecords.get(tabId);
+  const unchanged =
+    prev?.url === parsed.url && prev.verdict === verdict && prev.reason === reason;
   const record: TabRecord = {
     tabId,
     url: parsed.url,
     title,
     host: parsed.host,
-    pathname: parsed.pathname,
     verdict,
-    updatedAt: Date.now(),
-    ...extras,
+    reason,
+    updatedAt: unchanged ? prev.updatedAt : Date.now(),
   };
-  writeRecord(record);
-  if (verdict === "allow") lastAllowedTabId = tabId;
-  if (verdict === "block" && lastAllowedTabId === tabId) lastAllowedTabId = null;
-  await notifyTab(record, workContext);
+  tabRecords.set(tabId, record);
+  if (!unchanged) await notifyTab(record, workContext);
 }
 
-type QueryTab = {
-  id?: number;
-  url?: string;
-  title?: string;
-};
+function lookupCache(allowlist: AllowEntry[], contextHash: string, parsed: ParsedUrl) {
+  const now = Date.now();
+  const usable = allowlist.filter(
+    (item) =>
+      item.contextHash === contextHash &&
+      (item.verdict !== "hold" || now - item.at < HOLD_TTL_MS),
+  );
+  const key = urlKey(parsed);
+  return (
+    usable.find((item) => item.scope === "url" && item.key === key) ??
+    usable.find((item) => item.scope === "host" && item.key === parsed.host)
+  );
+}
 
-async function judgeBatch(
+/** Verdict without asking Jev, or null when the tab needs judging. */
+function localVerdict(
   settings: Settings,
   contextHash: string,
-  pending: Array<{ tab: QueryTab; parsed: NonNullable<ReturnType<typeof parseTabUrl>> }>,
-): Promise<Settings> {
-  const tabs = pending.map(({ tab, parsed }) => ({
-    title: tab.title ?? parsed.host,
-    host: parsed.host,
-    url: parsed.url,
-    path: parsed.pathname,
-  }));
+  parsed: ParsedUrl,
+): { verdict: TabVerdict; reason: string } | null {
+  if (parsed.internal) return { verdict: "skipped", reason: "Browser page." };
+  if (settings.mode !== "study") return { verdict: "skipped", reason: "Free mode." };
+  if (!settings.apiKey) return { verdict: "skipped", reason: "Add a TypeSafe API key." };
+  if (!contextHash) return { verdict: "skipped", reason: "Set what you are working on." };
+
+  const pin = settings.pins.find((item) => item.host === parsed.host);
+  if (pin) {
+    return {
+      verdict: pin.kind,
+      reason: pin.kind === "allow" ? "Pinned on the allow list." : "Pinned off the list.",
+    };
+  }
+  const cached = lookupCache(settings.allowlist, contextHash, parsed);
+  if (cached) {
+    return { verdict: cached.verdict, reason: verdictReason(cached.verdict, cached.signals) };
+  }
+  return null;
+}
+
+async function judgeBatch(settings: Settings, contextHash: string, pending: PendingTab[]) {
   const response = await systemOne({
     apiKey: settings.apiKey,
-    state: sessionState(settings.workContext, tabs),
-    questions: buildTabQuestions(tabs.length),
+    state: sessionState(
+      settings.workContext,
+      pending.map(({ title, parsed }) => ({ title, host: parsed.host, url: parsed.url })),
+    ),
+    questions: buildTabQuestions(pending.length),
   });
 
-  let next = settings;
-  for (let i = 0; i < pending.length; i++) {
-    const item = pending[i];
-    if (!item || item.tab.id == null) continue;
-    const tabId = item.tab.id;
-    const { tab, parsed } = item;
+  const at = Date.now();
+  const results = pending.map((item, i) => {
     const signals = {
       relevant: readNoul(response.answers, `relevant_${i}`),
       distraction: readNoul(response.answers, `distraction_${i}`),
       workTool: readNoul(response.answers, `work_tool_${i}`),
     };
-    const verdict = composeVerdict(signals, settings.thresholds);
-    const scope = cacheScope(signals, verdict, settings.thresholds);
+    const verdict = composeVerdict(signals);
+    const scope = cacheScope(signals, verdict);
     const entry: AllowEntry = {
-      key: scope === "host" ? hostKey(parsed.host) : urlKey(parsed.host, parsed.pathname, parsed.search),
-      host: parsed.host,
-      pathname: parsed.pathname,
+      key: scope === "host" ? item.parsed.host : urlKey(item.parsed),
+      host: item.parsed.host,
       scope,
       verdict,
       signals,
       source: "jev",
-      at: Date.now(),
+      at,
       contextHash,
     };
-    next = {
-      ...next,
-      allowlist: upsertAllowEntry(next.allowlist, entry),
-    };
+    return { item, entry };
+  });
 
-    let live: QueryTab | undefined;
-    try {
-      live = await browser.tabs.get(tabId);
-    } catch {
-      live = undefined;
-    }
-    const liveParsed = parseTabUrl(live?.url);
-    if (!liveParsed || !samePage(liveParsed, parsed)) {
+  await updateSettings((s) => ({
+    ...s,
+    allowlist: pruneAllowlist(
+      upsertAllowEntries(s.allowlist, results.map((r) => r.entry)),
+      contextHash,
+    ),
+  }));
+
+  for (const { item, entry } of results) {
+    const live = await browser.tabs.get(item.tabId).catch(() => undefined);
+    if (!live) continue;
+    const liveParsed = parseTabUrl(live.url);
+    if (liveParsed?.url !== item.parsed.url) {
       rescanNeeded = true;
       continue;
     }
-
-    await applyVerdict(
-      tabId,
+    await setRecord(
+      item.tabId,
       liveParsed,
-      live?.title ?? tab.title ?? parsed.host,
-      verdict,
-      { signals, source: "jev", reason: verdictReason(verdict, signals) },
+      live.title || item.title,
+      entry.verdict,
+      verdictReason(entry.verdict, entry.signals),
       settings.workContext,
     );
   }
-  next = { ...next, allowlist: pruneAllowlist(next.allowlist, contextHash) };
-  await saveSettings(next);
-  return next;
 }
 
 async function scanAllTabs() {
@@ -232,164 +197,160 @@ async function scanAllTabs() {
   lastError = null;
   try {
     const settings = await loadSettings();
-    const tabs = await browser.tabs.query({});
-    const contextHash = settings.workContext
-      ? await hashContext(settings.workContext)
-      : "";
-    const pending: Array<{
-      tab: QueryTab;
-      parsed: NonNullable<ReturnType<typeof parseTabUrl>>;
-    }> = [];
+    const contextHash = await hashContext(settings.workContext);
+    const pending: PendingTab[] = [];
 
-    for (const tab of tabs) {
-      if (tab.id == null) continue;
+    for (const tab of await browser.tabs.query({})) {
       const parsed = parseTabUrl(tab.url);
-      if (!parsed) continue;
-      if (parsed.internal) {
-        await applyVerdict(
-          tab.id,
-          parsed,
-          tab.title ?? parsed.host,
-          "skipped",
-          { source: "internal", reason: "Browser page." },
-          settings.workContext,
-        );
+      if (tab.id == null || !parsed) continue;
+      const title = tab.title || parsed.host;
+      const local = localVerdict(settings, contextHash, parsed);
+      if (local) {
+        await setRecord(tab.id, parsed, title, local.verdict, local.reason, settings.workContext);
         continue;
       }
-      if (settings.mode !== "study") {
-        await applyVerdict(
-          tab.id,
-          parsed,
-          tab.title ?? parsed.host,
-          "skipped",
-          { reason: "Free mode." },
-          settings.workContext,
-        );
-        continue;
+      const existing = tabRecords.get(tab.id)?.verdict;
+      if (existing !== "block" && existing !== "hold") {
+        await setRecord(tab.id, parsed, title, "checking", "Asking Jev…", settings.workContext);
       }
-      if (!settings.apiKey) {
-        await applyVerdict(
-          tab.id,
-          parsed,
-          tab.title ?? parsed.host,
-          "skipped",
-          { reason: "Add a TypeSafe API key." },
-          settings.workContext,
-        );
-        continue;
-      }
-      if (!settings.workContext.trim()) {
-        await applyVerdict(
-          tab.id,
-          parsed,
-          tab.title ?? parsed.host,
-          "skipped",
-          { reason: "Set what you are working on." },
-          settings.workContext,
-        );
-        continue;
-      }
-
-      const pin = pinFor(settings, parsed.host);
-      if (pin) {
-        await applyVerdict(
-          tab.id,
-          parsed,
-          tab.title ?? parsed.host,
-          pin.kind === "allow" ? "allow" : "block",
-          {
-            source: "pin",
-            reason:
-              pin.kind === "allow"
-                ? "Pinned on the allow list."
-                : "Pinned off the list.",
-          },
-          settings.workContext,
-        );
-        continue;
-      }
-
-      const cached = lookupCache(
-        settings,
-        contextHash,
-        parsed.host,
-        parsed.pathname,
-        parsed.search,
-      );
-      if (cached) {
-        await applyVerdict(
-          tab.id,
-          parsed,
-          tab.title ?? parsed.host,
-          cached.verdict,
-          {
-            signals: cached.signals,
-            source: cached.source,
-            reason: verdictReason(cached.verdict, cached.signals),
-          },
-          settings.workContext,
-        );
-        continue;
-      }
-
-      const existing = tabRecords.get(tab.id);
-      if (existing?.verdict !== "block" && existing?.verdict !== "hold") {
-        await applyVerdict(
-          tab.id,
-          parsed,
-          tab.title ?? parsed.host,
-          "checking",
-          { reason: "Asking Jev…" },
-          settings.workContext,
-        );
-      }
-      pending.push({ tab, parsed });
+      pending.push({ tabId: tab.id, title, parsed });
     }
 
-    let current = settings;
+    const batches: Promise<void>[] = [];
     for (let i = 0; i < pending.length; i += BATCH_SIZE) {
-      current = await judgeBatch(
-        current,
-        contextHash,
-        pending.slice(i, i + BATCH_SIZE),
-      );
+      batches.push(judgeBatch(settings, contextHash, pending.slice(i, i + BATCH_SIZE)));
     }
-
-    const blocked = [...tabRecords.values()].filter(
-      (record) => record.verdict === "block",
-    ).length;
-    setBadge(settings.mode, blocked);
+    const failed = (await Promise.allSettled(batches)).find((r) => r.status === "rejected");
+    if (failed) throw failed.reason;
   } catch (error) {
     if (error instanceof TypeSafeHttpError && error.status === 401) {
       lastError = "TypeSafe API key was rejected.";
     } else {
       lastError = error instanceof Error ? error.message : "Judging failed.";
-      if (!(error instanceof TypeSafeHttpError && error.status === 401)) {
-        rescanNeeded = true;
-      }
     }
   } finally {
     judging = false;
     await pushState();
-    if (rescanNeeded) {
-      rescanNeeded = false;
-      scheduleScan();
-    }
+    if (rescanNeeded) scheduleScan();
   }
 }
 
 function scheduleScan() {
   if (scanTimer) clearTimeout(scanTimer);
-  scanTimer = setTimeout(() => {
-    void scanAllTabs();
-  }, 280);
+  scanTimer = setTimeout(() => void scanAllTabs(), 280);
 }
 
 async function mutateSettings(patch: (current: Settings) => Settings) {
-  const current = await loadSettings();
-  await saveSettings(patch(current));
+  await updateSettings(patch);
   scheduleScan();
   await pushState();
+}
+
+function withPin(settings: Settings, host: string, kind: PinKind): Settings {
+  return {
+    ...settings,
+    pins: [...settings.pins.filter((pin) => pin.host !== host), { host, kind }],
+  };
+}
+
+async function keepTab(tabId: number, always: boolean) {
+  const tab = await browser.tabs.get(tabId);
+  const parsed = parseTabUrl(tab.url);
+  if (!parsed) return;
+  const settings = await loadSettings();
+  if (always) {
+    await updateSettings((s) => withPin(s, parsed.host, "allow"));
+  } else {
+    const contextHash = await hashContext(settings.workContext);
+    const entry: AllowEntry = {
+      key: urlKey(parsed),
+      host: parsed.host,
+      scope: "url",
+      verdict: "allow",
+      source: "override",
+      at: Date.now(),
+      contextHash,
+    };
+    await updateSettings((s) => ({ ...s, allowlist: upsertAllowEntries(s.allowlist, [entry]) }));
+  }
+  await setRecord(
+    tabId,
+    parsed,
+    tab.title || parsed.host,
+    "allow",
+    always ? "Pinned on the allow list." : verdictReason("allow"),
+    settings.workContext,
+  );
+  if (always) scheduleScan();
+  await pushState();
+}
+
+/** Jump to the most recently used allowed tab and close this one. */
+async function leaveTab(tabId: number) {
+  const [target] = (await browser.tabs.query({}))
+    .filter(
+      (tab) => tab.id != null && tab.id !== tabId && tabRecords.get(tab.id)?.verdict === "allow",
+    )
+    .sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0));
+  if (target?.id != null) {
+    await browser.tabs.update(target.id, { active: true });
+    await browser.windows.update(target.windowId, { focused: true });
+  }
+  await browser.tabs.remove(tabId);
+}
+
+async function handlePopup(message: PopupToBackground): Promise<LiveState> {
+  switch (message.type) {
+    case "SET_MODE":
+      await mutateSettings((s) => ({ ...s, mode: message.mode }));
+      break;
+    case "SET_CONTEXT":
+      await mutateSettings((s) => ({ ...s, workContext: message.workContext.trim() }));
+      break;
+    case "SET_API_KEY":
+      await mutateSettings((s) => ({ ...s, apiKey: message.apiKey.trim() }));
+      break;
+    case "PIN_HOST":
+      await mutateSettings((s) => withPin(s, message.host, message.kind));
+      break;
+    case "UNPIN_HOST":
+      await mutateSettings((s) => ({
+        ...s,
+        pins: s.pins.filter((pin) => pin.host !== message.host),
+      }));
+      break;
+    case "REMOVE_ALLOW_ENTRY":
+      await mutateSettings((s) => ({
+        ...s,
+        allowlist: s.allowlist.filter((item) => item.key !== message.key),
+      }));
+      break;
+    case "RESCAN":
+      await mutateSettings((s) => ({
+        ...s,
+        allowlist: s.allowlist.filter((item) => item.source !== "jev"),
+      }));
+      break;
+  }
+  return snapshot();
+}
+
+async function handleContent(message: ContentToBackground, tab: Browser.tabs.Tab) {
+  const tabId = tab.id!;
+  switch (message.type) {
+    case "KEEP":
+      return keepTab(tabId, message.always);
+    case "LEAVE":
+      return leaveTab(tabId);
+    case "GATE_FOR_ME": {
+      const existing = tabRecords.get(tabId);
+      if (existing && existing.url === parseTabUrl(tab.url)?.url) {
+        const settings = await loadSettings();
+        return notifyTab(existing, settings.workContext);
+      }
+      scheduleScan();
+    }
+  }
 }
 
 export default defineBackground(() => {
@@ -398,161 +359,27 @@ export default defineBackground(() => {
     if (alarm.name === SCAN_ALARM) void scanAllTabs();
   });
 
-  browser.tabs.onUpdated.addListener((_id, change, tab) => {
-    if (change.url || change.status === "complete" || change.title) {
-      if (tab.id != null && change.url) tabRecords.delete(tab.id);
-      scheduleScan();
-    }
+  browser.tabs.onUpdated.addListener((tabId, change) => {
+    if (change.url) tabRecords.delete(tabId);
+    if (change.url || change.status === "complete" || change.title) scheduleScan();
   });
-  browser.tabs.onActivated.addListener(() => scheduleScan());
   browser.tabs.onRemoved.addListener((tabId) => {
     tabRecords.delete(tabId);
-    if (lastAllowedTabId === tabId) lastAllowedTabId = null;
     void pushState();
   });
 
   browser.runtime.onMessage.addListener(
-    (message: PopupToBackground | GateMessage, sender) => {
-      if (!message || typeof message !== "object" || !("type" in message)) {
-        return;
-      }
-
-      const fromTab = sender.tab != null;
-      const privileged =
-        message.type === "SET_MODE" ||
-        message.type === "SET_CONTEXT" ||
-        message.type === "SET_API_KEY" ||
-        message.type === "PIN_HOST" ||
-        message.type === "UNPIN_HOST" ||
-        message.type === "REMOVE_ALLOW_ENTRY" ||
-        message.type === "RESCAN" ||
-        message.type === "OVERRIDE_TAB";
-      if (fromTab && privileged) {
-        return snapshot();
-      }
-
-      if (message.type === "GET_STATE") {
-        return snapshot();
-      }
-
-      if (message.type === "SET_MODE") {
-        return mutateSettings((s) => ({ ...s, mode: message.mode }));
-      }
-      if (message.type === "SET_CONTEXT") {
-        return mutateSettings((s) => ({ ...s, workContext: message.workContext }));
-      }
-      if (message.type === "SET_API_KEY") {
-        return mutateSettings((s) => ({ ...s, apiKey: message.apiKey.trim() }));
-      }
-      if (message.type === "PIN_HOST") {
-        return mutateSettings((s) => ({
-          ...s,
-          pins: [
-            ...s.pins.filter((pin) => pin.host !== message.host),
-            { host: message.host, kind: message.kind },
-          ],
-        }));
-      }
-      if (message.type === "UNPIN_HOST") {
-        return mutateSettings((s) => ({
-          ...s,
-          pins: s.pins.filter((pin) => pin.host !== message.host),
-        }));
-      }
-      if (message.type === "REMOVE_ALLOW_ENTRY") {
-        return mutateSettings((s) => ({
-          ...s,
-          allowlist: s.allowlist.filter((item) => item.key !== message.key),
-        }));
-      }
-      if (message.type === "RESCAN") {
-        return mutateSettings((s) => ({
-          ...s,
-          allowlist: s.allowlist.filter((item) => item.source !== "jev"),
-        }));
-      }
-      if (message.type === "OVERRIDE_TAB" || message.type === "OVERRIDE_HERE") {
-        const tabId =
-          message.type === "OVERRIDE_TAB" ? message.tabId : sender.tab?.id;
-        if (tabId == null) return snapshot();
-        if (message.verdict !== "allow" && message.verdict !== "block") {
-          return snapshot();
-        }
-        const always = Boolean(message.always);
-        const kind: PinKind = message.verdict === "allow" ? "allow" : "block";
-        return (async () => {
-          const tab = await browser.tabs.get(tabId);
-          const parsed = parseTabUrl(tab.url);
-          if (!parsed) return snapshot();
-          if (always) {
-            await mutateSettings((s) => ({
-              ...s,
-              pins: [
-                ...s.pins.filter((pin) => pin.host !== parsed.host),
-                { host: parsed.host, kind },
-              ],
-            }));
-          } else {
-            const settings = await loadSettings();
-            const contextHash = settings.workContext
-              ? await hashContext(settings.workContext)
-              : "";
-            const entry: AllowEntry = {
-              key: urlKey(parsed.host, parsed.pathname, parsed.search),
-              host: parsed.host,
-              pathname: parsed.pathname,
-              scope: "url",
-              verdict: message.verdict,
-              signals: { relevant: 0, distraction: 0, workTool: 0 },
-              source: "override",
-              at: Date.now(),
-              contextHash,
-            };
-            await saveSettings({
-              ...settings,
-              allowlist: upsertAllowEntry(settings.allowlist, entry),
-            });
-            await applyVerdict(
-              tabId,
-              parsed,
-              tab.title ?? parsed.host,
-              message.verdict,
-              {
-                source: "override",
-                reason:
-                  message.verdict === "allow"
-                    ? "Allowed for this tab."
-                    : "Blocked for this tab.",
-              },
-              settings.workContext,
-            );
-            if (
-              message.verdict === "block" &&
-              lastAllowedTabId != null &&
-              lastAllowedTabId !== tabId
-            ) {
-              void browser.tabs
-                .update(lastAllowedTabId, { active: true })
-                .catch(() => undefined);
-            }
-            await pushState();
-          }
-          return snapshot();
-        })();
-      }
-
-      if (message.type === "GATE_FOR_ME" && sender.tab?.id != null) {
-        const existing = tabRecords.get(sender.tab.id);
-        if (existing) {
-          void loadSettings().then((settings) =>
-            notifyTab(existing, settings.workContext),
-          );
-        } else {
-          scheduleScan();
-        }
-      }
-
-      return undefined;
+    (message: PopupToBackground | ContentToBackground, sender, sendResponse) => {
+      if (!message || typeof message !== "object" || !("type" in message)) return;
+      const result =
+        sender.tab?.id != null
+          ? handleContent(message as ContentToBackground, sender.tab)
+          : handlePopup(message as PopupToBackground);
+      result.then(sendResponse, (error: unknown) => {
+        console.error(error);
+        sendResponse(undefined);
+      });
+      return true;
     },
   );
 

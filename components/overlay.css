@@ -5,59 +5,39 @@
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgba(17, 24, 28, 0.72);
-  font-family: "Segoe UI", system-ui, sans-serif;
+  background: rgba(17, 24, 28, 0.8);
+  font: 15px/1.4 system-ui, sans-serif;
   color: #142027;
 }
 
 .stud-card {
-  width: min(420px, 100%);
+  width: min(360px, 100%);
   background: #f7f5f0;
-  border-radius: 20px;
-  padding: 28px 24px 22px;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+  border-radius: 16px;
+  padding: 24px;
   text-align: center;
 }
 
 .stud-mascot {
-  width: 72px;
-  height: 72px;
+  width: 64px;
+  height: 64px;
   object-fit: contain;
-  margin: 0 auto 8px;
-}
-
-.stud-kicker {
-  margin: 0;
-  font-size: 12px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: #0f766e;
-  font-weight: 700;
 }
 
 .stud-card h1 {
-  margin: 8px 0 10px;
-  font-size: 26px;
-  letter-spacing: -0.03em;
-  font-weight: 750;
+  margin: 8px 0;
+  font-size: 22px;
+  font-weight: 700;
 }
 
 .stud-context,
-.stud-body,
-.stud-reason,
-.stud-host {
-  margin: 0 0 8px;
-  line-height: 1.4;
+.stud-reason {
+  margin: 0 0 6px;
 }
 
 .stud-context {
   color: #0f766e;
-  font-size: 13px;
-}
-
-.stud-body {
-  font-size: 15px;
-  color: #334155;
+  font-weight: 600;
 }
 
 .stud-reason {
@@ -65,36 +45,27 @@
   color: #64748b;
 }
 
-.stud-host {
-  font-size: 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: #475569;
-}
-
 .stud-actions {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 18px;
+  margin-top: 16px;
 }
 
 .stud-actions button {
   border: 0;
   border-radius: 10px;
-  padding: 11px 14px;
+  padding: 10px 14px;
   font: inherit;
-  font-weight: 650;
+  font-weight: 600;
   cursor: pointer;
+  background: #e7e5e0;
+  color: #142027;
 }
 
 .stud-actions .primary {
-  background: linear-gradient(90deg, #2563eb, #14b8a6);
+  background: #0f766e;
   color: white;
-}
-
-.stud-actions .ghost {
-  background: #e7f6f3;
-  color: #115e59;
 }
 
 .stud-actions .quiet {

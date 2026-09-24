@@ -21,18 +21,16 @@ assert(
   "noul near 0.5 is hold, not medium intensity",
 );
 assert(
-  cacheScope(
-    { relevant: 0.1, distraction: 0.92, workTool: 0.05 },
-    "block",
-  ) === "host",
-  "clear entertainment can cache at host",
+  cacheScope({ relevant: 0.2, distraction: 0.1, workTool: 0.9 }, "allow") === "host",
+  "work tools cache at host",
 );
 assert(
-  cacheScope(
-    { relevant: 0.88, distraction: 0.1, workTool: 0.2 },
-    "allow",
-  ) === "url",
+  cacheScope({ relevant: 0.88, distraction: 0.1, workTool: 0.2 }, "allow") === "url",
   "topic-specific allow stays on the url",
+);
+assert(
+  cacheScope({ relevant: 0.1, distraction: 0.92, workTool: 0.05 }, "block") === "url",
+  "blocks stay on the url",
 );
 
 console.log("compose tests passed");
