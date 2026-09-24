@@ -2,10 +2,10 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { BackgroundToPopup, LiveState, PopupToBackground, TabVerdict } from "../../lib/types";
 
 const STATUS: Partial<Record<TabVerdict, string>> = {
-  allow: "allowed",
-  block: "blocked",
-  hold: "review",
-  checking: "checking",
+  allow: "okay",
+  block: "off",
+  hold: "not sure",
+  checking: "looking",
 };
 
 export default function App() {
@@ -40,6 +40,8 @@ export default function App() {
 
   const { settings } = state;
   const study = settings.mode === "study";
+  const needsContext = !settings.workContext.trim();
+  const canStart = state.hasApiKey && !needsContext;
   const contextDirty = contextDraft.trim() !== settings.workContext;
   const tabs = state.tabs.filter((tab) => tab.verdict !== "skipped");
   const allowPins = settings.pins.filter((pin) => pin.kind === "allow");
@@ -68,18 +70,12 @@ export default function App() {
       <header className="top">
         <img src="/mascot.png" alt="" width={32} height={32} />
         <h1>stud</h1>
-        <button
-          type="button"
-          className={study ? "mode on" : "mode"}
-          onClick={() => send({ type: "SET_MODE", mode: study ? "free" : "study" })}
-        >
-          {study ? "study" : "free"}
-        </button>
       </header>
 
       {!state.hasApiKey ? (
         <section className="card">
-          <label htmlFor="key">TypeSafe API key</label>
+          <label htmlFor="key">TypeSafe key</label>
+          <p className="hint">Needed so stud can check tabs during a session.</p>
           <div className="row">
             <input
               id="key"
@@ -105,78 +101,86 @@ export default function App() {
           onChange={(event) => setContextDraft(event.target.value)}
           onKeyDown={onContextKey}
         />
-        {study && !settings.workContext ? (
-          <p className="hint">Tabs are judged once this is set.</p>
-        ) : null}
         {contextDirty ? (
           <div className="row end">
             <button type="button" className="save" onClick={saveContext}>
-              set
+              save
             </button>
           </div>
         ) : null}
       </section>
 
-      {state.lastError ? <p className="error">{state.lastError}</p> : null}
-
-      {study ? (
-        <section>
-          <div className="section-head">
-            <h2>open tabs</h2>
-            <button
-              type="button"
-              className="text"
-              disabled={state.judging}
-              onClick={() => send({ type: "RESCAN" })}
-            >
-              {state.judging ? "checking…" : "rescan"}
-            </button>
-          </div>
-          <ul className="list">
-            {tabs.length === 0 ? <li className="muted">No pages to judge.</li> : null}
-            {tabs.map((tab) => (
-              <li key={tab.tabId} className={tab.verdict}>
-                <div className="grow">
-                  <p className="title">{tab.title}</p>
-                  <p className="muted">{tab.host}</p>
-                </div>
-                {tab.verdict === "checking" ? null : (
-                  <button
-                    type="button"
-                    className="text"
-                    onClick={() =>
-                      send({
-                        type: "PIN_HOST",
-                        host: tab.host,
-                        kind: tab.verdict === "allow" ? "block" : "allow",
-                      })
-                    }
-                  >
-                    always {tab.verdict === "allow" ? "block" : "allow"}
-                  </button>
-                )}
-                <span className="pill">{STATUS[tab.verdict]}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
+      <button
+        type="button"
+        className={study ? "session end" : "session start"}
+        disabled={!study && !canStart}
+        onClick={() => send({ type: "SET_MODE", mode: study ? "free" : "study" })}
+      >
+        {study ? "End session" : "Start session"}
+      </button>
+      {!study && !state.hasApiKey ? <p className="hint">Add your key before you start.</p> : null}
+      {!study && state.hasApiKey && needsContext ? (
+        <p className="hint">Say what you are working on, then start.</p>
       ) : null}
 
+      {state.lastError ? <p className="error">{state.lastError}</p> : null}
+
       <section>
-        <h2>allow list</h2>
+        <div className="section-head">
+          <h2>your tabs</h2>
+          <button
+            type="button"
+            className="text"
+            disabled={state.judging}
+            onClick={() => send({ type: "RESCAN" })}
+          >
+            {state.judging ? "checking…" : "check again"}
+          </button>
+        </div>
+        <ul className="list">
+          {tabs.length === 0 ? <li className="muted">No tabs to show yet.</li> : null}
+          {tabs.map((tab) => (
+            <li key={tab.tabId} className={tab.verdict}>
+              <div className="grow">
+                <p className="title">{tab.title}</p>
+                <p className="muted">{tab.host}</p>
+              </div>
+              {tab.verdict === "checking" ? null : (
+                <button
+                  type="button"
+                  className="text"
+                  onClick={() =>
+                    send({
+                      type: "PIN_HOST",
+                      host: tab.host,
+                      kind: tab.verdict === "allow" ? "block" : "allow",
+                    })
+                  }
+                >
+                  always {tab.verdict === "allow" ? "block" : "allow"}
+                </button>
+              )}
+              <span className="pill">{STATUS[tab.verdict]}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section>
+        <h2>okay for this session</h2>
         <ul className="list">
           {allowPins.length === 0 && allowEntries.length === 0 ? (
-            <li className="muted">Nothing yet.</li>
+            <li className="muted">Sites land here once a session is going.</li>
           ) : null}
           {allowPins.map((pin) => (
             <li key={`pin-${pin.host}`}>
-              <span className="grow">{pin.host} · pinned</span>
+              <span className="grow">{pin.host} · always</span>
               <button
                 type="button"
                 className="text"
                 onClick={() => send({ type: "UNPIN_HOST", host: pin.host })}
               >
-                unpin
+                forget
               </button>
             </li>
           ))}
@@ -197,7 +201,7 @@ export default function App() {
 
       {blockPins.length > 0 ? (
         <section>
-          <h2>always blocked</h2>
+          <h2>kept off</h2>
           <ul className="list">
             {blockPins.map((pin) => (
               <li key={pin.host}>
@@ -207,7 +211,7 @@ export default function App() {
                   className="text"
                   onClick={() => send({ type: "UNPIN_HOST", host: pin.host })}
                 >
-                  unpin
+                  forget
                 </button>
               </li>
             ))}
@@ -224,7 +228,7 @@ export default function App() {
             send({ type: "SET_API_KEY", apiKey: "" });
           }}
         >
-          clear API key
+          remove key
         </button>
       ) : null}
     </main>

@@ -32,5 +32,14 @@ assert(
   cacheScope({ relevant: 0.1, distraction: 0.92, workTool: 0.05 }, "block") === "url",
   "blocks stay on the url",
 );
+assert(
+  cacheScope({ relevant: 0.2, distraction: 0.1, workTool: 0.9 }, "allow", "google.com") === "url",
+  "search hosts stay per query",
+);
+assert(
+  cacheScope({ relevant: 0.2, distraction: 0.1, workTool: 0.9 }, "allow", "docs.google.com") ===
+    "host",
+  "docs stay a work tool host",
+);
 
 console.log("compose tests passed");

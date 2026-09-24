@@ -76,6 +76,7 @@ export type GateMessage = {
   verdict: TabVerdict;
   workContext: string;
   host: string;
+  url: string;
   reason?: string;
 };
 

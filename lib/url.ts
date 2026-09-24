@@ -27,6 +27,27 @@ export function urlKey({ host, pathname, search }: ParsedUrl): string {
   return `${host}${pathname.replace(/\/$/, "") || "/"}${search}`;
 }
 
+const SEARCH_HOSTS = new Set([
+  "bing.com",
+  "duckduckgo.com",
+  "duck.com",
+  "yahoo.com",
+  "search.yahoo.com",
+  "brave.com",
+  "search.brave.com",
+  "startpage.com",
+  "ecosia.org",
+  "baidu.com",
+  "yandex.com",
+  "yandex.ru",
+]);
+
+/** Result pages stay per query. Country Google domains count; Docs and Gmail do not. */
+export function isSearchHost(host: string): boolean {
+  const h = host.replace(/^www\./, "").toLowerCase();
+  return SEARCH_HOSTS.has(h) || h.startsWith("google.");
+}
+
 export async function hashContext(workContext: string): Promise<string> {
   const normalized = workContext.trim().toLowerCase();
   if (!normalized) return "";

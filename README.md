@@ -1,20 +1,34 @@
-# stud
+# <img src="public/mascot.png" width="32" height="32" alt="" valign="middle"> stud
 
-Chrome extension. You name the work. In study mode, Jev scores each open tab. Code keeps an allow list and covers the rest.
+Stud the study bud is a Chrome extension for the part of a study session that leaks into the browser. You are in problem sets and essays. Tabs pile up. Stud watches them against what you said you were working on.
+
+Start a session, name the work, and keep going. Pages that belong stay. Pages that don't belong get a gate from the mascot. You can keep a tab, always allow a site, or go back to the work.
+
+This is a remake of the original [stud](https://github.com/albertastrom/stud) from HackHarvard 2023, rebuilt around TypeSafe Jev. The first version mixed a web app, a timer, and an extension. This one is the extension: you name the work, start a session, and Jev scores the tabs.
+
+This build has no timer, no break check-in, and no past-session dashboard.
 
 ## Load
 
 1. `npm install && npm run build`
 2. Chrome → `chrome://extensions` → Developer mode → Load unpacked → `.output/chrome-mv3`
-3. Paste a TypeSafe API key, set context, switch to **study**
+3. Paste a TypeSafe key, say what you are working on, press **Start session**
 
 `npm run dev` for live reload on the same unpacked path.
 
+![Four steps: save a key, set the work, start a session, then a gate on off-list tabs](docs/readme/session-flow.png)
+
+![stud overlay on minecraft.net during a linear algebra session](docs/readme/overlay.png)
+
+![stud popup with Start session and open tabs](docs/readme/popup.png)
+
 ## Decisions
 
-One TypeSafe request per batch. Three nouls per tab: relevant to the work, distraction, general work tool. `lib/compose.ts` maps those to allow, block, or hold.
+One TypeSafe request per batch. Three nouls per tab: does it help this work, is it a distraction, is it a general work tool. `lib/compose.ts` turns those into okay, off, or not sure.
 
-Noul near 0.5 is hold. A work tool allows its whole host. Everything else caches per URL, so a lecture on YouTube can pass while the feed stays blocked.
+Near 0.5 is not sure. A work tool allows its whole host. Search engines stay on that query, so one blocked search does not block the host. Everything else caches per URL, so a lecture on YouTube can pass while the feed stays blocked.
+
+The tab you are looking at is judged first. A verdict is dropped if you already left that page.
 
 On a gated page, **back to work** closes it and jumps to your last allowed tab. Pin hosts from the overlay or the popup. Thresholds live in `lib/defaults.ts`. The API key stays in `chrome.storage.local` on this device.
 

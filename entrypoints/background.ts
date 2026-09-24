@@ -22,9 +22,10 @@ import type {
 } from "../lib/types";
 import { hashContext, parseTabUrl, urlKey, type ParsedUrl } from "../lib/url";
 
-type PendingTab = { tabId: number; title: string; parsed: ParsedUrl };
+type PendingTab = { tabId: number; title: string; parsed: ParsedUrl; gen: number };
 
 const tabRecords = new Map<number, TabRecord>();
+const tabGen = new Map<number, number>();
 let lastError: string | null = null;
 let judging = false;
 let rescanNeeded = false;
@@ -53,12 +54,24 @@ async function pushState() {
     .catch(() => undefined);
 }
 
+function bumpGen(tabId: number) {
+  tabGen.set(tabId, (tabGen.get(tabId) ?? 0) + 1);
+}
+
+function forgetTabPage(tabId: number) {
+  tabRecords.delete(tabId);
+  bumpGen(tabId);
+}
+
 async function notifyTab(record: TabRecord, workContext: string) {
+  const live = await browser.tabs.get(record.tabId).catch(() => undefined);
+  if (parseTabUrl(live?.url)?.url !== record.url) return;
   const message: GateMessage = {
     type: "STUD_GATE",
     verdict: record.verdict,
     workContext,
     host: record.host,
+    url: record.url,
     reason: record.reason,
   };
   // chrome:// and discarded tabs have no content script
@@ -110,15 +123,15 @@ function localVerdict(
   parsed: ParsedUrl,
 ): { verdict: TabVerdict; reason: string } | null {
   if (parsed.internal) return { verdict: "skipped", reason: "Browser page." };
-  if (settings.mode !== "study") return { verdict: "skipped", reason: "Free mode." };
-  if (!settings.apiKey) return { verdict: "skipped", reason: "Add a TypeSafe API key." };
-  if (!contextHash) return { verdict: "skipped", reason: "Set what you are working on." };
+  if (settings.mode !== "study") return { verdict: "skipped", reason: "No session." };
+  if (!settings.apiKey) return { verdict: "skipped", reason: "Add your TypeSafe key first." };
+  if (!contextHash) return { verdict: "skipped", reason: "Say what you are working on first." };
 
   const pin = settings.pins.find((item) => item.host === parsed.host);
   if (pin) {
     return {
       verdict: pin.kind,
-      reason: pin.kind === "allow" ? "Pinned on the allow list." : "Pinned off the list.",
+      reason: pin.kind === "allow" ? "You allowed this site." : "You kept this site off.",
     };
   }
   const cached = lookupCache(settings.allowlist, contextHash, parsed);
@@ -146,7 +159,7 @@ async function judgeBatch(settings: Settings, contextHash: string, pending: Pend
       workTool: readNoul(response.answers, `work_tool_${i}`),
     };
     const verdict = composeVerdict(signals);
-    const scope = cacheScope(signals, verdict);
+    const scope = cacheScope(signals, verdict, item.parsed.host);
     const entry: AllowEntry = {
       key: scope === "host" ? item.parsed.host : urlKey(item.parsed),
       host: item.parsed.host,
@@ -172,7 +185,7 @@ async function judgeBatch(settings: Settings, contextHash: string, pending: Pend
     const live = await browser.tabs.get(item.tabId).catch(() => undefined);
     if (!live) continue;
     const liveParsed = parseTabUrl(live.url);
-    if (liveParsed?.url !== item.parsed.url) {
+    if (item.gen !== (tabGen.get(item.tabId) ?? 0) || liveParsed?.url !== item.parsed.url) {
       rescanNeeded = true;
       continue;
     }
@@ -211,17 +224,31 @@ async function scanAllTabs() {
       }
       const existing = tabRecords.get(tab.id)?.verdict;
       if (existing !== "block" && existing !== "hold") {
-        await setRecord(tab.id, parsed, title, "checking", "Asking Jev…", settings.workContext);
+        await setRecord(tab.id, parsed, title, "checking", "Checking…", settings.workContext);
       }
-      pending.push({ tabId: tab.id, title, parsed });
+      pending.push({ tabId: tab.id, title, parsed, gen: tabGen.get(tab.id) ?? 0 });
     }
 
-    const batches: Promise<void>[] = [];
-    for (let i = 0; i < pending.length; i += BATCH_SIZE) {
-      batches.push(judgeBatch(settings, contextHash, pending.slice(i, i + BATCH_SIZE)));
+    const [focused] = await browser.tabs.query({ active: true, lastFocusedWindow: true });
+    const urgent = pending.filter((item) => item.tabId === focused?.id);
+    const rest = pending.filter((item) => item.tabId !== focused?.id);
+    let urgentError: unknown;
+    if (urgent.length) {
+      try {
+        await judgeBatch(settings, contextHash, urgent);
+      } catch (error) {
+        urgentError = error;
+      }
     }
-    const failed = (await Promise.allSettled(batches)).find((r) => r.status === "rejected");
-    if (failed) throw failed.reason;
+    if (!(urgentError instanceof TypeSafeHttpError && urgentError.status === 401)) {
+      const batches: Promise<void>[] = [];
+      for (let i = 0; i < rest.length; i += BATCH_SIZE) {
+        batches.push(judgeBatch(settings, contextHash, rest.slice(i, i + BATCH_SIZE)));
+      }
+      const failed = (await Promise.allSettled(batches)).find((r) => r.status === "rejected");
+      if (!urgentError && failed) urgentError = failed.reason;
+    }
+    if (urgentError) throw urgentError;
   } catch (error) {
     if (error instanceof TypeSafeHttpError && error.status === 401) {
       lastError = "TypeSafe API key was rejected.";
@@ -237,7 +264,7 @@ async function scanAllTabs() {
 
 function scheduleScan() {
   if (scanTimer) clearTimeout(scanTimer);
-  scanTimer = setTimeout(() => void scanAllTabs(), 280);
+  scanTimer = setTimeout(() => void scanAllTabs(), 50);
 }
 
 async function mutateSettings(patch: (current: Settings) => Settings) {
@@ -278,7 +305,7 @@ async function keepTab(tabId: number, always: boolean) {
     parsed,
     tab.title || parsed.host,
     "allow",
-    always ? "Pinned on the allow list." : verdictReason("allow"),
+    always ? "You allowed this site." : verdictReason("allow"),
     settings.workContext,
   );
   if (always) scheduleScan();
@@ -344,10 +371,12 @@ async function handleContent(message: ContentToBackground, tab: Browser.tabs.Tab
       return leaveTab(tabId);
     case "GATE_FOR_ME": {
       const existing = tabRecords.get(tabId);
-      if (existing && existing.url === parseTabUrl(tab.url)?.url) {
+      const liveUrl = parseTabUrl(tab.url)?.url;
+      if (existing && existing.url === liveUrl) {
         const settings = await loadSettings();
         return notifyTab(existing, settings.workContext);
       }
+      if (existing && liveUrl && existing.url !== liveUrl) forgetTabPage(tabId);
       scheduleScan();
     }
   }
@@ -359,12 +388,15 @@ export default defineBackground(() => {
     if (alarm.name === SCAN_ALARM) void scanAllTabs();
   });
 
-  browser.tabs.onUpdated.addListener((tabId, change) => {
-    if (change.url) tabRecords.delete(tabId);
+  browser.tabs.onUpdated.addListener((tabId, change, tab) => {
+    const live = parseTabUrl(tab.url);
+    const existing = tabRecords.get(tabId);
+    if (change.url || (existing && live && existing.url !== live.url)) forgetTabPage(tabId);
     if (change.url || change.status === "complete" || change.title) scheduleScan();
   });
+  browser.tabs.onActivated.addListener(() => scheduleScan());
   browser.tabs.onRemoved.addListener((tabId) => {
-    tabRecords.delete(tabId);
+    forgetTabPage(tabId);
     void pushState();
   });
 

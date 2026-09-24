@@ -1,5 +1,6 @@
 import { THRESHOLDS as t } from "./defaults.ts";
 import type { CacheScope, Signals, Verdict } from "./types.ts";
+import { isSearchHost } from "./url.ts";
 
 export function composeVerdict({ relevant, distraction, workTool }: Signals): Verdict {
   if (distraction >= t.blockDistraction && relevant < t.blockMaxRelevant) {
@@ -26,25 +27,26 @@ export function composeVerdict({ relevant, distraction, workTool }: Signals): Ve
   return "hold";
 }
 
-/** Only work tools cache per host; blocks stay per URL so a lecture on a media site can still pass. */
-export function cacheScope(signals: Signals, verdict: Verdict): CacheScope {
+/** Work tools cache per host. Blocks and search queries stay on the URL. */
+export function cacheScope(signals: Signals, verdict: Verdict, host?: string): CacheScope {
+  if (host && isSearchHost(host)) return "url";
   return verdict === "allow" && signals.workTool >= t.toolAllow ? "host" : "url";
 }
 
 export function verdictReason(verdict: Verdict, signals?: Signals): string {
   if (!signals) {
-    if (verdict === "allow") return "You kept this page.";
-    if (verdict === "block") return "Off the list.";
+    if (verdict === "allow") return "This is okay for the session.";
+    if (verdict === "block") return "This is off the list for this work.";
     return "Not sure yet.";
   }
   const pct = (n: number) => `${Math.round(n * 100)}%`;
   if (verdict === "allow") {
     return signals.relevant < t.relevantAllow && signals.workTool >= t.toolAllow
-      ? `Work tool (${pct(signals.workTool)}).`
-      : `Relevant to this work (${pct(signals.relevant)}).`;
+      ? `Looks like a work tool (${pct(signals.workTool)}).`
+      : `Looks useful for this work (${pct(signals.relevant)}).`;
   }
   if (verdict === "block") {
-    return `Distraction (${pct(signals.distraction)}).`;
+    return `Looks like a distraction (${pct(signals.distraction)}).`;
   }
   return `Close call: relevant ${pct(signals.relevant)}, distraction ${pct(signals.distraction)}.`;
 }
