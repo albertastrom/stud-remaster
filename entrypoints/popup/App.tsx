@@ -1,108 +1,94 @@
-import { useEffect, useMemo, useState } from "react";
-import type { BackgroundToPopup, LiveState, PopupToBackground } from "../../lib/types";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import type { BackgroundToPopup, LiveState, PopupToBackground, TabVerdict } from "../../lib/types";
 
-const mascot = "/mascot.png";
-
-async function send<T>(message: PopupToBackground): Promise<T> {
-  return browser.runtime.sendMessage(message) as Promise<T>;
-}
-
-function statusLabel(verdict: string) {
-  if (verdict === "allow") return "allowed";
-  if (verdict === "block") return "blocked";
-  if (verdict === "hold") return "review";
-  if (verdict === "checking") return "checking";
-  return "idle";
-}
+const STATUS: Partial<Record<TabVerdict, string>> = {
+  allow: "allowed",
+  block: "blocked",
+  hold: "review",
+  checking: "checking",
+};
 
 export default function App() {
   const [state, setState] = useState<LiveState | null>(null);
   const [contextDraft, setContextDraft] = useState("");
   const [apiDraft, setApiDraft] = useState("");
-  const [showKey, setShowKey] = useState(false);
+  const savedContext = useRef("");
+
+  function apply(next: LiveState | undefined) {
+    if (!next) return;
+    const prev = savedContext.current;
+    const saved = next.settings.workContext;
+    savedContext.current = saved;
+    setContextDraft((draft) => (draft === prev ? saved : draft));
+    setState(next);
+  }
+
+  function send(message: PopupToBackground) {
+    void browser.runtime.sendMessage(message).then(apply);
+  }
 
   useEffect(() => {
-    void send<LiveState>({ type: "GET_STATE" }).then((next) => {
-      setState(next);
-      setContextDraft(next.settings.workContext);
-    });
+    send({ type: "GET_STATE" });
     const onMessage = (message: BackgroundToPopup) => {
-      if (message?.type === "STATE") {
-        setState(message.state);
-        setContextDraft((current) =>
-          current === message.state.settings.workContext || current === ""
-            ? message.state.settings.workContext
-            : current,
-        );
-      }
+      if (message?.type === "STATE") apply(message.state);
     };
     browser.runtime.onMessage.addListener(onMessage);
     return () => browser.runtime.onMessage.removeListener(onMessage);
   }, []);
 
-  const settings = state?.settings;
-  const study = settings?.mode === "study";
-  const needsKey = !state?.hasApiKey;
-  const needsContext = !settings?.workContext.trim();
+  if (!state) return null;
 
-  const list = useMemo(
-    () =>
-      (state?.tabs ?? []).filter(
-        (tab) => tab.verdict !== "skipped" || settings?.mode === "study",
-      ),
-    [state, settings?.mode],
+  const { settings } = state;
+  const study = settings.mode === "study";
+  const contextDirty = contextDraft.trim() !== settings.workContext;
+  const tabs = state.tabs.filter((tab) => tab.verdict !== "skipped");
+  const allowPins = settings.pins.filter((pin) => pin.kind === "allow");
+  const blockPins = settings.pins.filter((pin) => pin.kind === "block");
+  const allowEntries = settings.allowlist.filter(
+    (item) => item.contextHash === state.contextHash && item.verdict === "allow",
   );
 
-  const allowEntries = (settings?.allowlist ?? []).filter(
-    (item) => item.contextHash === state?.contextHash && item.verdict === "allow",
-  );
+  function saveContext() {
+    if (contextDirty) send({ type: "SET_CONTEXT", workContext: contextDraft });
+  }
 
-  if (!state || !settings) {
-    return (
-      <main className="shell">
-        <p className="muted">loading…</p>
-      </main>
-    );
+  function onContextKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      saveContext();
+    }
+  }
+
+  function saveKey() {
+    if (apiDraft.trim()) send({ type: "SET_API_KEY", apiKey: apiDraft });
   }
 
   return (
     <main className="shell">
       <header className="top">
-        <img src={mascot} alt="" width={40} height={40} />
-        <div>
-          <h1>stud</h1>
-          <p className="tag">your study buddy</p>
-        </div>
+        <img src="/mascot.png" alt="" width={32} height={32} />
+        <h1>stud</h1>
         <button
           type="button"
           className={study ? "mode on" : "mode"}
-          onClick={() =>
-            void send({ type: "SET_MODE", mode: study ? "free" : "study" })
-          }
+          onClick={() => send({ type: "SET_MODE", mode: study ? "free" : "study" })}
         >
           {study ? "study" : "free"}
         </button>
       </header>
 
-      {needsKey ? (
-        <section className="card warn">
+      {!state.hasApiKey ? (
+        <section className="card">
           <label htmlFor="key">TypeSafe API key</label>
           <div className="row">
             <input
               id="key"
-              type={showKey ? "text" : "password"}
+              type="password"
               value={apiDraft}
-              placeholder="sk-…"
               onChange={(event) => setApiDraft(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && saveKey()}
             />
-            <button type="button" onClick={() => setShowKey((v) => !v)}>
-              {showKey ? "hide" : "show"}
-            </button>
-            <button
-              type="button"
-              className="save"
-              onClick={() => void send({ type: "SET_API_KEY", apiKey: apiDraft })}
-            >
+            <button type="button" className="save" disabled={!apiDraft.trim()} onClick={saveKey}>
               save
             </button>
           </div>
@@ -113,127 +99,133 @@ export default function App() {
         <label htmlFor="context">what are you working on?</label>
         <textarea
           id="context"
-          rows={3}
+          rows={2}
           value={contextDraft}
           placeholder="ENGS 108 problem set 2, Kalman filters"
           onChange={(event) => setContextDraft(event.target.value)}
+          onKeyDown={onContextKey}
         />
-        <div className="row end">
-          <button
-            type="button"
-            className="save"
-            disabled={contextDraft.trim() === settings.workContext}
-            onClick={() =>
-              void send({ type: "SET_CONTEXT", workContext: contextDraft.trim() })
-            }
-          >
-            set context
-          </button>
-        </div>
-        {study && needsContext ? (
-          <p className="hint">Study mode waits until you set a context.</p>
+        {study && !settings.workContext ? (
+          <p className="hint">Tabs are judged once this is set.</p>
+        ) : null}
+        {contextDirty ? (
+          <div className="row end">
+            <button type="button" className="save" onClick={saveContext}>
+              set
+            </button>
+          </div>
         ) : null}
       </section>
 
       {state.lastError ? <p className="error">{state.lastError}</p> : null}
-      {state.judging ? <p className="hint">Jev is updating the allow list…</p> : null}
 
-      <section>
-        <div className="section-head">
-          <h2>open tabs</h2>
-          <button type="button" className="text" onClick={() => void send({ type: "RESCAN" })}>
-            rescan
-          </button>
-        </div>
-        <ul className="tabs">
-          {list.length === 0 ? (
-            <li className="muted">No pages to judge.</li>
-          ) : (
-            list.map((tab) => (
-              <li key={tab.tabId} className={`tab ${tab.verdict}`}>
-                <div>
-                  <p className="title">{tab.title || tab.host}</p>
-                  <p className="host">{tab.host}</p>
+      {study ? (
+        <section>
+          <div className="section-head">
+            <h2>open tabs</h2>
+            <button
+              type="button"
+              className="text"
+              disabled={state.judging}
+              onClick={() => send({ type: "RESCAN" })}
+            >
+              {state.judging ? "checking…" : "rescan"}
+            </button>
+          </div>
+          <ul className="list">
+            {tabs.length === 0 ? <li className="muted">No pages to judge.</li> : null}
+            {tabs.map((tab) => (
+              <li key={tab.tabId} className={tab.verdict}>
+                <div className="grow">
+                  <p className="title">{tab.title}</p>
+                  <p className="muted">{tab.host}</p>
                 </div>
-                <span className="pill">{statusLabel(tab.verdict)}</span>
+                {tab.verdict === "checking" ? null : (
+                  <button
+                    type="button"
+                    className="text"
+                    onClick={() =>
+                      send({
+                        type: "PIN_HOST",
+                        host: tab.host,
+                        kind: tab.verdict === "allow" ? "block" : "allow",
+                      })
+                    }
+                  >
+                    always {tab.verdict === "allow" ? "block" : "allow"}
+                  </button>
+                )}
+                <span className="pill">{STATUS[tab.verdict]}</span>
               </li>
-            ))
-          )}
-        </ul>
-      </section>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <section>
         <h2>allow list</h2>
         <ul className="list">
-          {settings.pins
-            .filter((pin) => pin.kind === "allow")
-            .map((pin) => (
-              <li key={`pin-${pin.host}`}>
-                <span>{pin.host} · pinned</span>
-                <button
-                  type="button"
-                  className="text"
-                  onClick={() => void send({ type: "UNPIN_HOST", host: pin.host })}
-                >
-                  unpin
-                </button>
-              </li>
-            ))}
-          {allowEntries.map((entry) => (
-            <li key={entry.key}>
-              <span>
-                {entry.scope === "host" ? entry.host : entry.key}
-              </span>
+          {allowPins.length === 0 && allowEntries.length === 0 ? (
+            <li className="muted">Nothing yet.</li>
+          ) : null}
+          {allowPins.map((pin) => (
+            <li key={`pin-${pin.host}`}>
+              <span className="grow">{pin.host} · pinned</span>
               <button
                 type="button"
                 className="text"
-                onClick={() => void send({ type: "REMOVE_ALLOW_ENTRY", key: entry.key })}
+                onClick={() => send({ type: "UNPIN_HOST", host: pin.host })}
+              >
+                unpin
+              </button>
+            </li>
+          ))}
+          {allowEntries.map((entry) => (
+            <li key={entry.key}>
+              <span className="grow">{entry.key}</span>
+              <button
+                type="button"
+                className="text"
+                onClick={() => send({ type: "REMOVE_ALLOW_ENTRY", key: entry.key })}
               >
                 remove
               </button>
             </li>
           ))}
-          {settings.pins.filter((p) => p.kind === "allow").length === 0 &&
-          allowEntries.length === 0 ? (
-            <li className="muted">Empty until Jev allows something.</li>
-          ) : null}
         </ul>
       </section>
 
-      {settings.pins.some((pin) => pin.kind === "block") ? (
+      {blockPins.length > 0 ? (
         <section>
           <h2>always blocked</h2>
           <ul className="list">
-            {settings.pins
-              .filter((pin) => pin.kind === "block")
-              .map((pin) => (
-                <li key={pin.host}>
-                  <span>{pin.host}</span>
-                  <button
-                    type="button"
-                    className="text"
-                    onClick={() => void send({ type: "UNPIN_HOST", host: pin.host })}
-                  >
-                    unpin
-                  </button>
-                </li>
-              ))}
+            {blockPins.map((pin) => (
+              <li key={pin.host}>
+                <span className="grow">{pin.host}</span>
+                <button
+                  type="button"
+                  className="text"
+                  onClick={() => send({ type: "UNPIN_HOST", host: pin.host })}
+                >
+                  unpin
+                </button>
+              </li>
+            ))}
           </ul>
         </section>
       ) : null}
 
-      {!needsKey ? (
-        <p className="foot">
-          <button
-            type="button"
-            className="text"
-            onClick={() =>
-              void send({ type: "SET_API_KEY", apiKey: "" }).then(() => setApiDraft(""))
-            }
-          >
-            clear API key
-          </button>
-        </p>
+      {state.hasApiKey ? (
+        <button
+          type="button"
+          className="text foot"
+          onClick={() => {
+            setApiDraft("");
+            send({ type: "SET_API_KEY", apiKey: "" });
+          }}
+        >
+          clear API key
+        </button>
       ) : null}
     </main>
   );
